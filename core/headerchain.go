@@ -208,7 +208,7 @@ func (hc *HeaderChain) ValidateHeaderChain(chain []*types.Header, checkFreq int)
 	// Do a sanity check that the provided chain is actually ordered and linked
 	for i := 1; i < len(chain); i++ {
 		if chain[i].Number.Uint64() != chain[i-1].Number.Uint64()+1 || chain[i].ParentHash != chain[i-1].Hash() {
-			// Chain broke ancestry, log a messge (programming error) and skip insertion
+			// Chain broke ancestry, log a message (programming error) and skip insertion
 			log.Error("Non contiguous header insert", "number", chain[i].Number, "hash", chain[i].Hash(),
 				"parent", chain[i].ParentHash, "prevnumber", chain[i-1].Number, "prevhash", chain[i-1].Hash())
 
@@ -219,14 +219,18 @@ func (hc *HeaderChain) ValidateHeaderChain(chain []*types.Header, checkFreq int)
 
 	// Generate the list of seal verification requests, and start the parallel verifier
 	seals := make([]bool, len(chain))
-	for i := 0; i < len(seals)/checkFreq; i++ {
-		index := i*checkFreq + hc.rand.Intn(checkFreq)
-		if index >= len(seals) {
-			index = len(seals) - 1
+	if checkFreq != 0 {
+		// In case of checkFreq == 0 all seals are left false.
+		for i := 0; i < len(seals)/checkFreq; i++ {
+			index := i*checkFreq + hc.rand.Intn(checkFreq)
+			if index >= len(seals) {
+				index = len(seals) - 1
+			}
+			seals[index] = true
 		}
-		seals[index] = true
+		// Last should always be verified to avoid junk.
+		seals[len(seals)-1] = true
 	}
-	seals[len(seals)-1] = true // Last should always be verified to avoid junk
 
 	abort, results := hc.engine.VerifyHeaders(hc, chain, seals)
 	defer close(abort)
@@ -281,8 +285,18 @@ func (hc *HeaderChain) InsertHeaderChain(chain []*types.Header, writeHeader WhCa
 	}
 	// Report some public statistics so the user has a clue what's going on
 	last := chain[len(chain)-1]
-	log.Info("Imported new block headers", "count", stats.processed, "elapsed", common.PrettyDuration(time.Since(start)),
-		"number", last.Number, "hash", last.Hash(), "ignored", stats.ignored)
+
+	context := []interface{}{
+		"count", stats.processed, "elapsed", common.PrettyDuration(time.Since(start)),
+		"number", last.Number, "hash", last.Hash(),
+	}
+	if timestamp := time.Unix(last.Time.Int64(), 0); time.Since(timestamp) > time.Minute {
+		context = append(context, []interface{}{"age", common.PrettyAge(timestamp)}...)
+	}
+	if stats.ignored > 0 {
+		context = append(context, []interface{}{"ignored", stats.ignored}...)
+	}
+	log.Info("Imported new block headers", context...)
 
 	return 0, nil
 }
